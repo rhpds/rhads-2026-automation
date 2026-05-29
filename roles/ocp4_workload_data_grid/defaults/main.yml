@@ -1,8 +1,4 @@
 ---
-become_override: false
-ocp_username: opentlc-mgr
-silent: false
-
 # Defaults values below are for Red Hat Integration - Data Grid
 # Channel to use for the Red Hat Integration subscription
 # When not set (or set to "") use the default channel for the
