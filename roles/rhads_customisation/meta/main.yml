@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: your_name
+  description: Role to resize Keycloak Postgres PVC and restart the pod
+  license: MIT
+  min_ansible_version: 2.9
+dependencies: []

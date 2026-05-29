@@ -1,0 +1,581 @@
+---
+# All tasks in this file run on bastion (delegated via main.yml)
+- name: Install openshift and kubernetes Python packages
+  command: /usr/libexec/platform-python -m pip install openshift kubernetes==33.1.0
+  
+- name: Download ArgoCD CLI binary
+  get_url:
+    url: "https://github.com/argoproj/argo-cd/releases/download/{{ argocd_version }}/argocd-linux-amd64"
+    dest: /usr/local/bin/argocd
+    mode: '0755'
+
+- name: Gather Keycloak PVCs
+  command: >
+    oc get pvc -n {{ namespace }} -l postgres-operator.crunchydata.com/cluster=keycloak -o json
+  register: keycloak_pvcs_raw
+
+- name: Set fact with parsed PVCs
+  set_fact:
+    keycloak_pvcs: "{{ (keycloak_pvcs_raw.stdout | from_json)['items'] }}"
+
+- name: Patch all Keycloak PVCs to increase storage
+  command: >
+    oc patch pvc {{ item.metadata.name }}
+    -n {{ namespace }}
+    --type=merge
+    -p '{"spec": {"resources": {"requests": {"storage": "{{ new_size }}"}}}}'
+  loop: "{{ keycloak_pvcs }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Wait for PVC resize to reflect
+  shell: >
+    oc get pvc {{ item.metadata.name }} -n {{ namespace }} -o json | jq -r '.status.capacity.storage'
+  register: pvc_capacity
+  until: pvc_capacity.stdout == new_size
+  retries: 15
+  delay: 10
+  loop: "{{ keycloak_pvcs }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Gather Keycloak pods
+  command: >
+    oc get pods -n {{ namespace }} -l postgres-operator.crunchydata.com/cluster=keycloak -o json
+  register: keycloak_pods_raw
+
+- name: Set fact with parsed pods
+  set_fact:
+    keycloak_pods: "{{ (keycloak_pods_raw.stdout | from_json)['items'] }}"
+
+- name: Delete Keycloak pods to pick up new PVC size
+  command: >
+    oc delete pod {{ item.metadata.name }} -n {{ namespace }}
+  loop: "{{ keycloak_pods }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Wait for pods to be running again
+  shell: >
+    oc get pod {{ item.metadata.name }} -n {{ namespace }} -o json | jq -r '.status.phase'
+  register: pod_status
+  until: pod_status.stdout == "Running"
+  retries: 20
+  delay: 15
+  loop: "{{ keycloak_pods }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Show final PVC and pod status
+  block:
+    - name: PVC status
+      command: oc get pvc -n {{ namespace }}
+
+    - name: Pods status
+      command: oc get pods -n {{ namespace }}
+
+- name: Patch the OpenShift Console resource to set logoutRedirect
+  command: >
+    oc patch console cluster
+    --type=merge
+    -p '{"spec": {"authentication": {"logoutRedirect": "{{ logout_redirect_url }}"}}}'
+  register: patch_result
+
+- name: Show patch result
+  debug:
+    var: patch_result.stdout
+
+- name: Apply KeycloakRealmImport custom resource
+  copy:
+    dest: /tmp/keycloak_realm_import.yaml
+    content: |
+      apiVersion: k8s.keycloak.org/v2alpha1
+      kind: KeycloakRealmImport
+      metadata:
+        name: trusted-artifact-signer
+        namespace: tssc-keycloak
+      spec:
+        keycloakCRName: keycloak
+        realm:
+          id: trusted-artifact-signer
+          realm: trusted-artifact-signer
+          displayName: "Trusted Artifact Signer"
+          enabled: true
+          clients:
+            - clientId: ocp4_workload_advanced_developer_suite_openshift_keycloak_client_id
+              enabled: true
+              protocol: openid-connect
+              redirectUris:
+                - "{{ ocp_console_url }}/*"
+              attributes:
+                post.logout.redirect.uris: "{{ ocp_console_url }}"
+
+- name: Apply KeycloakRealmImport using oc
+  command: >
+    oc apply -f /tmp/keycloak_realm_import.yaml
+
+- name: Debug kubeconfig path
+  debug:
+    msg: "{{ kubeconfig_path }}"
+
+- name: Create dynamic-plugins-npmrc Secret in OpenShift
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: dynamic-plugins-npmrc
+        namespace: tssc-dh
+      type: Opaque
+      data:
+        .npmrc: "{{ '@redhat:registry=https://npm.registry.redhat.com' | b64encode }}"
+
+- name: Get cluster ArgoCD route from openshift-gitops namespace
+  shell: >
+    oc -n openshift-gitops get route openshift-gitops-server -o jsonpath='{.spec.host}'
+  register: cluster_argo_route
+  changed_when: false
+
+- name: Set cluster ArgoCD URL fact
+  set_fact:
+    cluster_argo_url: "https://{{ cluster_argo_route.stdout }}"
+
+- name: Retrieve cluster ArgoCD credentials from openshift-gitops namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: openshift-gitops-cluster
+    namespace: "openshift-gitops"
+  register: r_cluster_argo_credentials
+  retries: 120
+  delay: 10
+  until:
+    - r_cluster_argo_credentials is defined
+    - r_cluster_argo_credentials.resources is defined
+    - r_cluster_argo_credentials.resources | length > 0
+
+- name: Set cluster ArgoCD admin password fact
+  set_fact:
+    cluster_argo_password: "{{ r_cluster_argo_credentials.resources[0].data['admin.password'] | b64decode }}"
+
+# NEW STEP 1: Get RHDH Deployment name dynamically
+- name: Get RHDH deployment name dynamically
+  command: oc get deploy -n tssc-dh -o jsonpath='{.items[0].metadata.name}'
+  register: rhdh_deployment_name
+  changed_when: false
+
+# NEW STEP 2: Wait for RHDH rollout to complete BEFORE touching config
+- name: Wait for RHDH deployment to be ready
+  vars:
+    rhdh_namespace: tssc-dh
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ rhdh_deployment_name.stdout }}"
+    namespace: "{{ rhdh_namespace }}"
+  until: rhdh_deploy_status.resources[0].status.availableReplicas == rhdh_deploy_status.resources[0].status.replicas
+  retries: 60
+  delay: 10
+  register: rhdh_deploy_status
+
+- name: Get current tssc-developer-hub-env Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: tssc-developer-hub-env
+    namespace: tssc-dh
+  register: current_dh_env_secret
+
+- name: Get current tssc-developer-hub-env Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: tssc-developer-hub-env
+    namespace: tssc-dh
+  register: current_dh_env_secret
+
+- name: Patch tssc-developer-hub-env Secret with cluster ArgoCD environment variables
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: tssc-developer-hub-env
+        namespace: tssc-dh
+      type: Opaque
+      data: >-
+        {{
+          current_dh_env_secret.resources[0].data | combine({
+            'CLUSTER_ARGOCD_URL': cluster_argo_url | b64encode,
+            'CLUSTER_ARGOCD_PASSWORD': cluster_argo_password | b64encode
+          })
+        }}
+
+- name: Get current tssc-developer-hub-app-config ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: tssc-developer-hub-app-config
+    namespace: tssc-dh
+  register: current_app_config
+
+- name: Parse current app-config.yaml content
+  set_fact:
+    app_config_yaml: "{{ current_app_config.resources[0].data['app-config.tssc.yaml'] | from_yaml }}"
+
+- name: Add cluster ArgoCD instance to argocd.appLocatorMethods[0].instances
+  set_fact:
+    updated_app_config: >-
+      {{
+        app_config_yaml | combine({
+          'argocd': app_config_yaml.argocd | combine({
+            'appLocatorMethods': [
+              app_config_yaml.argocd.appLocatorMethods[0] | combine({
+                'instances': app_config_yaml.argocd.appLocatorMethods[0].instances + [{
+                  'name': 'cluster-argocd',
+                  'url': '${CLUSTER_ARGOCD_URL}',
+                  'username': 'admin',
+                  'password': '${CLUSTER_ARGOCD_PASSWORD}'
+                }]
+              })
+            ] + (app_config_yaml.argocd.appLocatorMethods[1:] | default([]))
+          })
+        }, recursive=True)
+      }}
+
+- name: Patch tssc-developer-hub-app-config ConfigMap with new ArgoCD instance
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: tssc-developer-hub-app-config
+        namespace: tssc-dh
+      data:
+        app-config.tssc.yaml: "{{ updated_app_config | to_nice_yaml }}"
+
+# NEW STEP 3: Wait for RHDH rollout to complete AFTER config updates
+- name: Wait for RHDH deployment to be ready
+  vars:
+    rhdh_namespace: tssc-dh
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ rhdh_deployment_name.stdout }}"
+    namespace: "{{ rhdh_namespace }}"
+  until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
+  retries: 60
+  delay: 10
+  register: rhdh_deploy_status_after
+
+# NEW STEP 4: (Optional) Confirm RHDH pod status after rollout
+- name: Confirm RHDH pods are running
+  command: >
+    oc get pods -n tssc-dh -o jsonpath='{.items[*].status.phase}'
+  register: rhdh_pod_status
+  changed_when: false
+
+- name: Debug RHDH pod status
+  debug:
+    var: rhdh_pod_status.stdout
+    
+- name: Get GitLab Route from gitlab namespace
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: gitlab
+    namespace: gitlab
+  register: gitlab_route_info
+
+- name: Set GitLab URL fact
+  set_fact:
+    gitlab_url: "https://{{ gitlab_route_info.resources[0].spec.host }}"
+
+- name: Get GitLab root API token from Secret in gitlab namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: root-user-personal-token
+    namespace: gitlab
+  register: gitlab_token_secret
+
+- name: Set GitLab API token fact
+  set_fact:
+    gitlab_api_token: "{{ gitlab_token_secret.resources[0].data.token | b64decode }}"
+
+- name: Get development group ID from GitLab API
+  ansible.builtin.uri:
+    url: "{{ gitlab_url }}/api/v4/groups/rhdh"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ gitlab_api_token }}"
+    status_code: [200]
+  register: development_group_info
+
+- name: Set development GitLab group ID fact
+  set_fact:
+    development_group_id: "{{ development_group_info.json.id }}"
+
+- name: Get existing orchestrator-approvals project from development group
+  ansible.builtin.uri:
+    url: "{{ gitlab_url }}/api/v4/groups/{{ development_group_id }}/projects"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ gitlab_api_token }}"
+    status_code: [200]
+  register: development_projects
+
+- name: Debug projects in rhdh group
+  debug:
+    var: development_projects.json | map(attribute='name') | list
+
+- name: Find orchestrator-approvals project in rhdh group
+  set_fact:
+    r_existing_project: "{{ {'json': (development_projects.json | selectattr('name', 'equalto', 'orchestrator-approvals') | first)} }}"
+
+- name: Debug existing GitLab project info
+  debug:
+    var: r_existing_project
+
+- name: Create 'approved' label in GitLab project
+  ansible.builtin.uri:
+    url: "{{ gitlab_url }}/api/v4/projects/{{ r_existing_project.json.id }}/labels"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ gitlab_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "approved"
+      color: "#00FF00"
+    status_code: [201, 409]  # 409 in case label already exists
+
+- name: Create 'denied' label in GitLab project
+  ansible.builtin.uri:
+    url: "{{ gitlab_url }}/api/v4/projects/{{ r_existing_project.json.id }}/labels"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ gitlab_api_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "denied"
+      color: "#FF0000"
+    status_code: [201, 409]  # 409 in case label already exists
+
+- name: Get current DevWorkspaceTemplate web-terminal-tooling
+  kubernetes.core.k8s_info:
+    api_version: workspace.devfile.io/v1alpha2
+    kind: DevWorkspaceTemplate
+    name: web-terminal-tooling
+    namespace: openshift-operators
+  register: current_devworkspace_template
+
+- name: Patch DevWorkspaceTemplate web-terminal-tooling with updated image
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: workspace.devfile.io/v1alpha2
+      kind: DevWorkspaceTemplate
+      # This annotation ensures that changes to the web-terminal-tooling are not
+      # automatically overwritten by the DevWorkspaceTemplate controller.
+      metadata: >-
+        {{
+          current_devworkspace_template.resources[0].metadata | combine({
+            'annotations': (current_devworkspace_template.resources[0].metadata.annotations | default({})) | combine({
+              'web-terminal.redhat.com/unmanaged-state': 'true'
+            })
+          })
+        }}
+      # Patch to use our custom web-terminal image with latest tools
+      spec: >-
+        {{
+          current_devworkspace_template.resources[0].spec | combine({
+            'components': [{
+              'name': 'web-terminal-tooling',
+              'container': current_devworkspace_template.resources[0].spec.components[0].container | combine({
+                'image': 'quay.io/tssc_demos/custom-web-terminal:latest'
+              })
+            }]
+          })
+        }}
+
+- name: Patch NooBaa default BackingStore resource limits and requests
+  kubernetes.core.k8s:
+    api_version: noobaa.io/v1alpha1
+    kind: BackingStore
+    name: noobaa-default-backing-store
+    namespace: openshift-storage
+    merge_type: merge
+    definition:
+      spec:
+        pvPool:
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "4000Mi"
+            requests:
+              cpu: "500m"
+              memory: "500Mi"
+  tags:
+    - noobaa
+    - backingstore
+
+##################################################################################
+# Changing RHDH configmap's odic setting to login
+##################################################################################
+# STEP 1: Get existing ConfigMap
+- name: Get current RHDH ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: tssc-developer-hub-app-config
+    namespace: tssc-dh
+  register: rhdh_cm
+
+# STEP 2: Replace 'prompt: auto' → 'prompt: login'
+- name: Update OIDC prompt line in ConfigMap data
+  ansible.builtin.set_fact:
+    updated_app_config: "{{ rhdh_cm.resources[0].data['app-config.tssc.yaml'] | regex_replace('prompt:\\s*auto', 'prompt: login') }}"
+
+# STEP 3: Apply updated ConfigMap back
+- name: Apply updated ConfigMap
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: tssc-developer-hub-app-config
+    namespace: tssc-dh
+    definition:
+      data:
+        app-config.tssc.yaml: "{{ updated_app_config }}"
+
+# STEP 4: Wait for RHDH rollout to complete AFTER config updates
+- name: Wait for RHDH deployment to be ready
+  vars:
+    rhdh_namespace: tssc-dh
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ rhdh_deployment_name.stdout }}"
+    namespace: "{{ rhdh_namespace }}"
+  until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
+  retries: 60
+  delay: 10
+  register: rhdh_deploy_status_after
+
+# STEP 5: (Optional) Confirm RHDH pod status after rollout
+- name: Confirm RHDH pods are running
+  command: >
+    oc get pods -n tssc-dh -o jsonpath='{.items[*].status.phase}'
+  register: rhdh_pod_status
+  changed_when: false
+
+- name: Debug RHDH pod status
+  debug:
+    var: rhdh_pod_status.stdout
+
+#############################################################
+# 21 Nov , 2025
+#############################################################
+- name: "Load dynamic-plugins.yaml template"
+  set_fact:
+    dp_content: "{{ lookup('template', rhdh_dynamic_template) }}"
+  tags:
+    - test
+
+- name: "Apply RHDH dynamic-plugins ConfigMap"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ rhdh_cm_name }}"
+        namespace: "{{ rhdh_namespace }}"
+        labels:
+          app.kubernetes.io/managed-by: Helm
+          rhdh.redhat.com/ext-config-sync: "true"
+        annotations:
+          meta.helm.sh/release-name: "{{ rhdh_namespace }}"
+          meta.helm.sh/release-namespace: "{{ rhdh_namespace }}"
+      data:
+        dynamic-plugins.yaml: |
+          {{ dp_content | indent(0) }}
+  tags:
+    - test
+
+- name: Wait for RHDH deployment to be ready
+  vars:
+    rhdh_namespace: tssc-dh
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: backstage-developer-hub
+    namespace: "{{ rhdh_namespace }}"
+  until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
+  retries: 60
+  delay: 10
+  register: rhdh_deploy_status_after
+  tags:
+    - test
+
+- name: Restart Backstage deployment using oc
+  ansible.builtin.command: >
+    oc rollout restart deploy/backstage-developer-hub -n tssc-dh
+  tags:
+    - test
+
+- name: Wait for RHDH deployment to be ready
+  vars:
+    rhdh_namespace: tssc-dh
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: backstage-developer-hub
+    namespace: "{{ rhdh_namespace }}"
+  until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
+  retries: 60
+  delay: 10
+  register: rhdh_deploy_status_after
+  tags:
+    - test
+
+
+# Enable the image puller in DevSpaces
+- name: Get current DevSpaces CheCluster
+  kubernetes.core.k8s_info:
+    api_version: org.eclipse.che/v2
+    kind: CheCluster
+    name: devspaces
+    namespace: openshift-devspaces
+  register: current_checluster
+
+# Note the image added to the imagePuller is found in the devfiles in
+# https://github.com/opentraining-labs-customizations/tssc-developer-hub-configuration
+# We could make this more intelligent in the future by having it check
+# the imported repo in GitLab for the specific image in the devfiles there
+- name: Patch DevSpaces CheCluster to enable imagePuller
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: org.eclipse.che/v2
+      kind: CheCluster
+      metadata:
+        name: devspaces
+        namespace: openshift-devspaces
+      spec: >-
+        {{
+          current_checluster.resources[0].spec | combine({
+            'components': (current_checluster.resources[0].spec.components | default({})) | combine({
+              'imagePuller': {
+                'enable': true,
+                'spec': {
+                  'images': 'udi=quay.io/devfile/universal-developer-image:ubi9-9b60f86'
+                }
+              }
+            })
+          }, recursive=True)
+        }}

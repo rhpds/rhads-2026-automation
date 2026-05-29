@@ -1,0 +1,22 @@
+---
+namespace: rhpds
+name: rhads_2026_automation
+version: 1.0.0
+readme: README.md
+authors:
+  - Yogita Soni <ysoni@redhat.com>
+description: Red Hat Advanced Developer Suite 2026 Automation Collection
+license:
+  - GPL-2.0-or-later
+license_file: ''
+tags:
+  - rhads
+  - automation
+  - data_grid
+  - customisation
+dependencies: {}
+repository: https://github.com/rhpds/rhads-2026-automation
+documentation: https://github.com/rhpds/rhads-2026-automation
+homepage: https://github.com/rhpds/rhads-2026-automation
+issues: https://github.com/rhpds/rhads-2026-automation/issues
+build_ignore: []

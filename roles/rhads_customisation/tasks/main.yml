@@ -1,0 +1,9 @@
+---
+# Do not modify this file
+
+- name: Running Workload Tasks
+  include_tasks:
+    file: ./workload.yml
+    apply:
+      delegate_to: bastion
+  when: ACTION == "create" or ACTION == "provision"

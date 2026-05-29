@@ -1,0 +1,16 @@
+---
+argocd_version: "v3.1.5"
+namespace: tssc-keycloak
+new_size: 10Gi
+cluster_app_domain: "cluster-{{ guid }}.dynamic.redhatworkshops.io"
+ocp_console_url: "https://console-openshift-console.apps.{{ cluster_app_domain }}"
+logout_redirect_url: >-
+  https://sso.apps.{{ cluster_app_domain }}/realms/trusted-artifact-signer/protocol/openid-connect/logout?client_id=ocp4_workload_advanced_developer_suite_openshift_keycloak_client_id&post_logout_redirect_uri={{ ocp_console_url }}
+argo_namespace: tssc-gitops
+argo_username: admin
+cluster_context: admin
+kubeconfig_path: "{{ ansible_env.HOME }}/.kube/config"
+###########################################################
+rhdh_dynamic_template: "dynamic-plugins.yaml.j2"
+rhdh_namespace: "tssc-dh"
+rhdh_cm_name: "tssc-developer-hub-dynamic-plugins"
