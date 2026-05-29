@@ -5,13 +5,13 @@
   
 - name: Download ArgoCD CLI binary
   get_url:
-    url: "https://github.com/argoproj/argo-cd/releases/download/{{ argocd_version }}/argocd-linux-amd64"
+    url: "https://github.com/argoproj/argo-cd/releases/download/{{ ocp4_workload_rhads_customisation_argocd_version }}/argocd-linux-amd64"
     dest: /usr/local/bin/argocd
     mode: '0755'
 
 - name: Gather Keycloak PVCs
   command: >
-    oc get pvc -n {{ namespace }} -l postgres-operator.crunchydata.com/cluster=keycloak -o json
+    oc get pvc -n {{ ocp4_workload_rhads_customisation_namespace }} -l postgres-operator.crunchydata.com/cluster=keycloak -o json
   register: keycloak_pvcs_raw
 
 - name: Set fact with parsed PVCs
@@ -21,16 +21,16 @@
 - name: Patch all Keycloak PVCs to increase storage
   command: >
     oc patch pvc {{ item.metadata.name }}
-    -n {{ namespace }}
+    -n {{ ocp4_workload_rhads_customisation_namespace }}
     --type=merge
-    -p '{"spec": {"resources": {"requests": {"storage": "{{ new_size }}"}}}}'
+    -p '{"spec": {"resources": {"requests": {"storage": "{{ ocp4_workload_rhads_customisation_new_size }}"}}}}'
   loop: "{{ keycloak_pvcs }}"
   loop_control:
     label: "{{ item.metadata.name }}"
 
 - name: Wait for PVC resize to reflect
   shell: >
-    oc get pvc {{ item.metadata.name }} -n {{ namespace }} -o json | jq -r '.status.capacity.storage'
+    oc get pvc {{ item.metadata.name }} -n {{ ocp4_workload_rhads_customisation_namespace }} -o json | jq -r '.status.capacity.storage'
   register: pvc_capacity
   until: pvc_capacity.stdout == new_size
   retries: 15
@@ -41,7 +41,7 @@
 
 - name: Gather Keycloak pods
   command: >
-    oc get pods -n {{ namespace }} -l postgres-operator.crunchydata.com/cluster=keycloak -o json
+    oc get pods -n {{ ocp4_workload_rhads_customisation_namespace }} -l postgres-operator.crunchydata.com/cluster=keycloak -o json
   register: keycloak_pods_raw
 
 - name: Set fact with parsed pods
@@ -50,14 +50,14 @@
 
 - name: Delete Keycloak pods to pick up new PVC size
   command: >
-    oc delete pod {{ item.metadata.name }} -n {{ namespace }}
+    oc delete pod {{ item.metadata.name }} -n {{ ocp4_workload_rhads_customisation_namespace }}
   loop: "{{ keycloak_pods }}"
   loop_control:
     label: "{{ item.metadata.name }}"
 
 - name: Wait for pods to be running again
   shell: >
-    oc get pod {{ item.metadata.name }} -n {{ namespace }} -o json | jq -r '.status.phase'
+    oc get pod {{ item.metadata.name }} -n {{ ocp4_workload_rhads_customisation_namespace }} -o json | jq -r '.status.phase'
   register: pod_status
   until: pod_status.stdout == "Running"
   retries: 20
@@ -69,16 +69,16 @@
 - name: Show final PVC and pod status
   block:
     - name: PVC status
-      command: oc get pvc -n {{ namespace }}
+      command: oc get pvc -n {{ ocp4_workload_rhads_customisation_namespace }}
 
     - name: Pods status
-      command: oc get pods -n {{ namespace }}
+      command: oc get pods -n {{ ocp4_workload_rhads_customisation_namespace }}
 
 - name: Patch the OpenShift Console resource to set logoutRedirect
   command: >
     oc patch console cluster
     --type=merge
-    -p '{"spec": {"authentication": {"logoutRedirect": "{{ logout_redirect_url }}"}}}'
+    -p '{"spec": {"authentication": {"logoutRedirect": "{{ ocp4_workload_rhads_customisation_logout_redirect_url }}"}}}'
   register: patch_result
 
 - name: Show patch result
@@ -106,9 +106,9 @@
               enabled: true
               protocol: openid-connect
               redirectUris:
-                - "{{ ocp_console_url }}/*"
+                - "{{ ocp4_workload_rhads_customisation_ocp_console_url }}/*"
               attributes:
-                post.logout.redirect.uris: "{{ ocp_console_url }}"
+                post.logout.redirect.uris: "{{ ocp4_workload_rhads_customisation_ocp_console_url }}"
 
 - name: Apply KeycloakRealmImport using oc
   command: >
@@ -116,7 +116,7 @@
 
 - name: Debug kubeconfig path
   debug:
-    msg: "{{ kubeconfig_path }}"
+    msg: "{{ ocp4_workload_rhads_customisation_kubeconfig_path }}"
 
 - name: Create dynamic-plugins-npmrc Secret in OpenShift
   kubernetes.core.k8s:
@@ -173,7 +173,7 @@
     api_version: apps/v1
     kind: Deployment
     name: "{{ rhdh_deployment_name.stdout }}"
-    namespace: "{{ rhdh_namespace }}"
+    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
   until: rhdh_deploy_status.resources[0].status.availableReplicas == rhdh_deploy_status.resources[0].status.replicas
   retries: 60
   delay: 10
@@ -265,7 +265,7 @@
     api_version: apps/v1
     kind: Deployment
     name: "{{ rhdh_deployment_name.stdout }}"
-    namespace: "{{ rhdh_namespace }}"
+    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
   until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
   retries: 60
   delay: 10
@@ -460,7 +460,7 @@
     api_version: apps/v1
     kind: Deployment
     name: "{{ rhdh_deployment_name.stdout }}"
-    namespace: "{{ rhdh_namespace }}"
+    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
   until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
   retries: 60
   delay: 10
@@ -493,14 +493,14 @@
       apiVersion: v1
       kind: ConfigMap
       metadata:
-        name: "{{ rhdh_cm_name }}"
-        namespace: "{{ rhdh_namespace }}"
+        name: "{{ ocp4_workload_rhads_customisation_rhdh_cm_name }}"
+        namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
         labels:
           app.kubernetes.io/managed-by: Helm
           rhdh.redhat.com/ext-config-sync: "true"
         annotations:
-          meta.helm.sh/release-name: "{{ rhdh_namespace }}"
-          meta.helm.sh/release-namespace: "{{ rhdh_namespace }}"
+          meta.helm.sh/release-name: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
+          meta.helm.sh/release-namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
       data:
         dynamic-plugins.yaml: |
           {{ dp_content | indent(0) }}
@@ -514,7 +514,7 @@
     api_version: apps/v1
     kind: Deployment
     name: backstage-developer-hub
-    namespace: "{{ rhdh_namespace }}"
+    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
   until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
   retries: 60
   delay: 10
@@ -535,7 +535,7 @@
     api_version: apps/v1
     kind: Deployment
     name: backstage-developer-hub
-    namespace: "{{ rhdh_namespace }}"
+    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
   until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
   retries: 60
   delay: 10
