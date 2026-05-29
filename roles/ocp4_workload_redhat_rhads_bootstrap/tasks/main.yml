@@ -1,13 +1,13 @@
 ---
 - name: Login to OpenShift on localhost
-  kubernetes.core.k8s_auth:
-    host: "{{ openshift_api_url }}"
-    api_key: "{{ openshift_cluster_admin_token }}"
-    validate_certs: false
+  command: >
+    oc login {{ openshift_api_url }}
+    --token={{ openshift_cluster_admin_token }}
+    --insecure-skip-tls-verify=true
 
 - name: Login to OpenShift on bastion
-  kubernetes.core.k8s_auth:
-    host: "{{ openshift_api_url }}"
-    api_key: "{{ openshift_cluster_admin_token }}"
-    validate_certs: false
+  command: >
+    oc login {{ openshift_api_url }}
+    --token={{ openshift_cluster_admin_token }}
+    --insecure-skip-tls-verify=true
   delegate_to: bastion
