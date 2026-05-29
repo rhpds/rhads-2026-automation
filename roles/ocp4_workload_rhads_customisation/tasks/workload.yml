@@ -1,13 +1,19 @@
 ---
 # All tasks in this file run on bastion (delegated via main.yml)
+- name: Ensure pip is available for user
+  command: python3 -m ensurepip --user --default-pip
+  args:
+    creates: ~/.local/lib/python3.12/site-packages/pip
+
 - name: Install openshift and kubernetes Python packages
-  command: /usr/libexec/platform-python -m pip install openshift kubernetes==33.1.0
+  command: python3 -m pip install --user openshift kubernetes==33.1.0
   
 - name: Download ArgoCD CLI binary
   get_url:
     url: "https://github.com/argoproj/argo-cd/releases/download/{{ ocp4_workload_rhads_customisation_argocd_version }}/argocd-linux-amd64"
     dest: /usr/local/bin/argocd
     mode: '0755'
+  become: true
 
 - name: Gather Keycloak PVCs
   command: >
@@ -402,6 +408,11 @@
             }]
           })
         }}
+  when:
+    - current_devworkspace_template.resources is defined
+    - current_devworkspace_template.resources | length > 0
+    - current_devworkspace_template.resources[0].spec.components is defined
+    - current_devworkspace_template.resources[0].spec.components | length > 0
 
 - name: Patch NooBaa default BackingStore resource limits and requests
   kubernetes.core.k8s:
