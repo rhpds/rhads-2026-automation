@@ -9,7 +9,7 @@ ocp4_workload_rhads_customisation_logout_redirect_url: >-
 ocp4_workload_rhads_customisation_argo_namespace: tssc-gitops
 ocp4_workload_rhads_customisation_argo_username: admin
 ocp4_workload_rhads_customisation_cluster_context: admin
-ocp4_workload_rhads_customisation_kubeconfig_path: "{{ ansible_env.HOME }}/.kube/config"
+ocp4_workload_rhads_customisation_kubeconfig_path: "~/.kube/config"
 ###########################################################
 ocp4_workload_rhads_customisation_rhdh_dynamic_template: "dynamic-plugins.yaml.j2"
 ocp4_workload_rhads_customisation_rhdh_namespace: "tssc-dh"
