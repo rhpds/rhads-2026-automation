@@ -1,0 +1,20 @@
+---
+- name: Test rhads_customisation role on bastion
+  hosts: bastion
+  gather_facts: true
+
+  vars:
+    ACTION: create
+    # Required variables for the role
+    guid: "test-{{ 9999 | random }}"
+    ocp4_workload_rhads_customisation_namespace: tssc-keycloak
+    ocp4_workload_rhads_customisation_new_size: 10Gi
+    ocp4_workload_rhads_customisation_argocd_version: "v3.1.5"
+    ocp4_workload_rhads_customisation_cluster_app_domain: "apps.cluster-abc123.dynamic.redhatworkshops.io"
+    ocp4_workload_rhads_customisation_ocp_console_url: "https://console-openshift-console.apps.cluster-abc123.dynamic.redhatworkshops.io"
+    ocp4_workload_rhads_customisation_rhdh_namespace: "tssc-dh"
+    ocp4_workload_rhads_customisation_rhdh_cm_name: "tssc-developer-hub-dynamic-plugins"
+    ocp4_workload_rhads_customisation_rhdh_dynamic_template: "dynamic-plugins.yaml.j2"
+
+  roles:
+    - ocp4_workload_rhads_customisation

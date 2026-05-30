@@ -1,0 +1,19 @@
+---
+- name: Test ArgoCD download with sudo
+  hosts: bastion
+  gather_facts: false
+
+  vars:
+    ocp4_workload_rhads_customisation_argocd_version: "v3.1.5"
+
+  tasks:
+    - name: Download ArgoCD CLI binary
+      get_url:
+        url: "https://github.com/argoproj/argo-cd/releases/download/{{ ocp4_workload_rhads_customisation_argocd_version }}/argocd-linux-amd64"
+        dest: /usr/local/bin/argocd
+        mode: '0755'
+      become: true
+
+    - name: Verify ArgoCD is accessible
+      command: /usr/local/bin/argocd version --client
+      changed_when: false

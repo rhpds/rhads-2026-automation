@@ -7,7 +7,7 @@
 
 - name: Install openshift and kubernetes Python packages
   command: python3 -m pip install --user openshift kubernetes==33.1.0
-  
+
 - name: Download ArgoCD CLI binary
   get_url:
     url: "https://github.com/argoproj/argo-cd/releases/download/{{ ocp4_workload_rhads_customisation_argocd_version }}/argocd-linux-amd64"
@@ -287,7 +287,7 @@
 - name: Debug RHDH pod status
   debug:
     var: rhdh_pod_status.stdout
-    
+
 - name: Get GitLab Route from gitlab namespace
   kubernetes.core.k8s_info:
     api_version: route.openshift.io/v1
@@ -491,68 +491,68 @@
 #############################################################
 # 21 Nov , 2025
 #############################################################
-- name: "Load dynamic-plugins.yaml template"
-  set_fact:
-    dp_content: "{{ lookup('template', ocp4_workload_rhads_customisation_rhdh_dynamic_template) }}"
-  tags:
-    - test
+# - name: "Load dynamic-plugins.yaml template"
+#   set_fact:
+#     dp_content: "{{ lookup('template', ocp4_workload_rhads_customisation_rhdh_dynamic_template) }}"
+#   tags:
+#     - test
 
-- name: "Apply RHDH dynamic-plugins ConfigMap"
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: "{{ ocp4_workload_rhads_customisation_rhdh_cm_name }}"
-        namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
-        labels:
-          app.kubernetes.io/managed-by: Helm
-          rhdh.redhat.com/ext-config-sync: "true"
-        annotations:
-          meta.helm.sh/release-name: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
-          meta.helm.sh/release-namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
-      data:
-        dynamic-plugins.yaml: |
-          {{ dp_content | indent(0) }}
-  tags:
-    - test
+# - name: "Apply RHDH dynamic-plugins ConfigMap"
+#   kubernetes.core.k8s:
+#     state: present
+#     definition:
+#       apiVersion: v1
+#       kind: ConfigMap
+#       metadata:
+#         name: "{{ ocp4_workload_rhads_customisation_rhdh_cm_name }}"
+#         namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
+#         labels:
+#           app.kubernetes.io/managed-by: Helm
+#           rhdh.redhat.com/ext-config-sync: "true"
+#         annotations:
+#           meta.helm.sh/release-name: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
+#           meta.helm.sh/release-namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
+#       data:
+#         dynamic-plugins.yaml: |
+#           {{ dp_content | indent(0) }}
+#   tags:
+#     - test
 
-- name: Wait for RHDH deployment to be ready
-  vars:
-    rhdh_namespace: tssc-dh
-  kubernetes.core.k8s_info:
-    api_version: apps/v1
-    kind: Deployment
-    name: backstage-developer-hub
-    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
-  until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
-  retries: 60
-  delay: 10
-  register: rhdh_deploy_status_after
-  tags:
-    - test
+# - name: Wait for RHDH deployment to be ready
+#   vars:
+#     rhdh_namespace: tssc-dh
+#   kubernetes.core.k8s_info:
+#     api_version: apps/v1
+#     kind: Deployment
+#     name: backstage-developer-hub
+#     namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
+#   until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
+#   retries: 60
+#   delay: 10
+#   register: rhdh_deploy_status_after
+#   tags:
+#     - test
 
-- name: Restart Backstage deployment using oc
-  ansible.builtin.command: >
-    oc rollout restart deploy/backstage-developer-hub -n tssc-dh
-  tags:
-    - test
+# - name: Restart Backstage deployment using oc
+#   ansible.builtin.command: >
+#     oc rollout restart deploy/backstage-developer-hub -n tssc-dh
+#   tags:
+#     - test
 
-- name: Wait for RHDH deployment to be ready
-  vars:
-    rhdh_namespace: tssc-dh
-  kubernetes.core.k8s_info:
-    api_version: apps/v1
-    kind: Deployment
-    name: backstage-developer-hub
-    namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
-  until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
-  retries: 60
-  delay: 10
-  register: rhdh_deploy_status_after
-  tags:
-    - test
+# - name: Wait for RHDH deployment to be ready
+#   vars:
+#     rhdh_namespace: tssc-dh
+#   kubernetes.core.k8s_info:
+#     api_version: apps/v1
+#     kind: Deployment
+#     name: backstage-developer-hub
+#     namespace: "{{ ocp4_workload_rhads_customisation_rhdh_namespace }}"
+#   until: rhdh_deploy_status_after.resources[0].status.availableReplicas == rhdh_deploy_status_after.resources[0].status.replicas
+#   retries: 60
+#   delay: 10
+#   register: rhdh_deploy_status_after
+#   tags:
+#     - test
 
 
 # Enable the image puller in DevSpaces
