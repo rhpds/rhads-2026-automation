@@ -493,7 +493,7 @@
 #############################################################
 - name: "Load dynamic-plugins.yaml template"
   set_fact:
-    dp_content: "{{ lookup('template', rhdh_dynamic_template) }}"
+    dp_content: "{{ lookup('template', ocp4_workload_rhads_customisation_rhdh_dynamic_template) }}"
   tags:
     - test
 
