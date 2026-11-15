@@ -80,11 +80,48 @@
     - name: Pods status
       command: oc get pods -n {{ ocp4_workload_rhads_customisation_namespace }}
 
+- name: Read the cluster ingress domain
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Ingress
+    name: cluster
+  register: r_cluster_ingress
+
+- name: Read the cluster OAuth configuration
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: OAuth
+    name: cluster
+  register: r_cluster_oauth
+
+# The logout URL has to agree with the identity provider the console actually uses,
+# so take the issuer and client id straight from the OAuth object rather than
+# restating them. That keeps the realm correct across the tssc-iam consolidation
+# without this role having to know the realm name at all.
+- name: Derive console and logout URLs from the cluster
+  set_fact:
+    _rhads_apps_domain: "{{ _apps_domain }}"
+    _rhads_ocp_console_url: "{{ ocp4_workload_rhads_customisation_ocp_console_url
+      | default('', true) or 'https://console-openshift-console.' ~ _apps_domain }}"
+    _rhads_logout_redirect_url: "{{ ocp4_workload_rhads_customisation_logout_redirect_url
+      | default('', true) or _derived_logout }}"
+  vars:
+    _apps_domain: "{{ ocp4_workload_rhads_customisation_apps_domain
+      | default('', true) or r_cluster_ingress.resources[0].spec.domain }}"
+    _oidc: "{{ r_cluster_oauth.resources[0].spec.identityProviders[0].openID }}"
+    _console: "https://console-openshift-console.{{ _apps_domain }}"
+    _derived_logout: "{{ _oidc.issuer }}/protocol/openid-connect/logout?client_id={{
+      _oidc.clientID }}&post_logout_redirect_uri={{ _console }}"
+
+- name: Show the logout redirect that will be applied
+  debug:
+    var: _rhads_logout_redirect_url
+
 - name: Patch the OpenShift Console resource to set logoutRedirect
   command: >
     oc patch console cluster
     --type=merge
-    -p '{"spec": {"authentication": {"logoutRedirect": "{{ ocp4_workload_rhads_customisation_logout_redirect_url }}"}}}'
+    -p '{"spec": {"authentication": {"logoutRedirect": "{{ _rhads_logout_redirect_url }}"}}}'
   register: patch_result
 
 - name: Show patch result
@@ -112,9 +149,9 @@
               enabled: true
               protocol: openid-connect
               redirectUris:
-                - "{{ ocp4_workload_rhads_customisation_ocp_console_url }}/*"
+                - "{{ _rhads_ocp_console_url }}/*"
               attributes:
-                post.logout.redirect.uris: "{{ ocp4_workload_rhads_customisation_ocp_console_url }}"
+                post.logout.redirect.uris: "{{ _rhads_ocp_console_url }}"
 
 - name: Apply KeycloakRealmImport using oc
   command: >
